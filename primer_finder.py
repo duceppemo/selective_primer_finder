@@ -1,10 +1,27 @@
 #!/usr/local/env python3
 
+# Dependencies
+# conda install bbmap
+# conda install pigz
+# pip install pysam
+# conda install blast
+# conda install bowtie2
+# conda install samtools
+# conda install kmc
+# conda install jellyfish
+# conda install psutil
+
+
 from argparse import ArgumentParser
 from multiprocessing import cpu_count
 from primer_finder_methods import Methods
-from concurrent import futures
 import os
+import sys
+import pysam
+from glob import glob
+from shutil import rmtree
+from random import randint
+from psutil import virtual_memory
 
 
 class PrimerFinder(object):
@@ -14,15 +31,12 @@ class PrimerFinder(object):
         self.exclusion = args.exclusion
         self.out_folder = args.output
         self.cpu = args.threads
-        self.sketch_size = args.sketch_size
+        self.mem = args.memory
         self.kmer_size = args.kmer_size
 
         # Data
         self.inclusion_fasta_list = list()
         self.exclusion_fasta_list = list()
-        self.inclusion_sig_list = list()
-        self.exclusion_sig_list = list()
-
         self.seq_dict = dict()
         self.kmer_dict = dict([])
 
@@ -32,8 +46,9 @@ class PrimerFinder(object):
     def run(self):
 
         print('Checking a few things...')
-        # Check if number of CPU requested id valid
+        # Check if number of CPU and memory requested are valid
         self.cpu = Methods.check_cpus(self.cpu)
+        self.mem = Methods.check_mem(self.mem)
 
         # Check if folders are not empty
         result = Methods.check_folder_empty(self.inclusion)
@@ -54,154 +69,147 @@ class PrimerFinder(object):
                 if result == 0:
                     raise Exception('{} is not a valid fasta file'.format(fasta))
 
-        # print('Computing signatures for inclusion...')
-        # Methods.parallel_sourmash_compute(self.inclusion_fasta_list,
-        #                                   os.path.join(self.out_folder, 'inclusion/'),
-        #                                   self.cpu,
-        #                                   self.kmer_size,
-        #                                   self.sketch_size)
-        # print('Computing signatures for exclusion...')
-        # Methods.parallel_sourmash_compute(self.exclusion_fasta_list,
-        #                                   os.path.join(self.out_folder, 'exclusion/'),
-        #                                   self.cpu,
-        #                                   self.kmer_size,
-        #                                   self.sketch_size)
+        #################################################
+        # Using jellyfish
+        Methods.create_output_folders(self.out_folder)
+        Methods.cat_files(self.inclusion_fasta_list, self.out_folder + '/tmp.fasta')
+        Methods.create_output_folders(self.out_folder + '/jellyfish')
 
-        # put signature files into list
-        self.inclusion_sig_list = Methods.get_files(os.path.join(self.out_folder, 'inclusion/'), ['.sig'])
-        self.exclusion_sig_list = Methods.get_files(os.path.join(self.out_folder, 'exclusion/'), ['.sig'])
+        print('Running Jellyfish on inclusion group...')
+        # Only keep the kemrs that are in all genomes of inclusion group
+        # comparing kmer counts to number of inclusion for that purpose
+        # Not perfect since a kmer can be found multiple times in a single genome
+        Methods.jellyfish_count(self.out_folder + '/tmp.fasta',
+                                self.out_folder + '/jellyfish/inclusion_merged.jf',
+                                self.cpu, self.kmer_size, len(self.inclusion_fasta_list))  # Not perfect
+        os.remove(self.out_folder + '/tmp.fasta')
 
-        # print('Finding common signatures of inclusion group...')
-        # Methods.sourmash_signature_intersect(self.inclusion_sig_list,
-        #                                      self.out_folder + '/common_to_inclusion.sig')
-        # print('Subtracting signatures from exclusion group...')
-        # Methods.sourmash_signature_subtract(self.out_folder + '/common_to_inclusion.sig',
-        #                                     self.exclusion_sig_list,
-        #                                     self.out_folder + '/specific_to_inclusion.sig')
+        # Any kmer present at least 1 time in the exclusion group will we remove from the inclusion group
+        Methods.cat_files(self.exclusion_fasta_list, self.out_folder + '/tmp.fasta')
+        print('Running Jellyfish on exclusion group...')
+        Methods.jellyfish_count(self.out_folder + '/tmp.fasta',
+                                self.out_folder + '/jellyfish/exclusion_merged.jf',
+                                self.cpu, self.kmer_size, 1)
+        os.remove(self.out_folder + '/tmp.fasta')
 
-        # Use the first genome of inclusion list to get the kmer sequences.
-        # Any would work because sourmash reports only perfect matches,
-        # thus present in all genomes from the inclusion group
-        csv_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.csv'
+        # Dump kmers to dictionary
+        print('Dumping inclusion kmers to dictionary...')
+        incl_dict = Methods.jellyfish_dump(self.out_folder + '/jellyfish/inclusion_merged.jf')
+        print('Dumping exclusion kmers to dictionary...')
+        excl_dict = Methods.jellyfish_dump(self.out_folder + '/jellyfish/exclusion_merged.jf')
 
-        # print('Fetching kmer sequences...')
-        # Methods.sourmash_signature_to_kmer(csv_file,
-        #                                    self.out_folder + '/specific_to_inclusion.sig',
-        #                                    self.inclusion_fasta_list[0])
+        # Delete jellyfish database files
+        rmtree(self.out_folder + '/jellyfish')
 
-        # Parse csv and convert to fasta
-        # check if file empty
-        # TODO -> only keep the one that applies for 'no kmer'
-        if os.stat(csv_file).st_size == 0:
-            raise Exception('No unique sequences found.')
-        elif sum(1 for line in open(csv_file, 'r')) < 2:  # header and a least one kmer
-            raise Exception('No unique sequences found.')
-        else:
-            Methods.parse_cvs(csv_file, self.seq_dict)
+        # Subtract exclusion kmers to the inclusion kmers
+        print('Subtracting kmers...')
+        self.seq_dict = {str(i): key for i, key in enumerate(incl_dict.keys()) if key not in excl_dict.keys()}
 
+        # Write kmer to file in fasta format
         fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
-        # if self.seq_dict:
-        #     Methods.dict_to_fasta(self.seq_dict, fasta_kmer_file)
+        if self.seq_dict:
+            Methods.dict_to_fasta(self.seq_dict, fasta_kmer_file)
+        else:
+            raise Exception('No unique kmers found...')
 
-        # Check which part of the kmer is really unique
-        print('Finding unique regions of kmers...')
-        # count kmer in exclusion group
-        # merge all exclusion genomes in a single file
-        # assume that they are all gzipped or all not gzipped
-        # Methods.cat_files(self.exclusion_fasta_list, self.out_folder + '/tmp.fasta')
-        # Methods.jellyfish_count(self.out_folder + '/tmp.fasta',
-        #                         self.out_folder + '/jellyfish/exclusion_merged.jf',
-        #                         self.cpu)
-        # os.remove(self.out_folder + '/tmp.fasta')
-        '''
-        Do not work properly
-        
-        Methods.parallel_jellyfish_count(self.exclusion_fasta_list, self.out_folder + '/jellyfish/', self.cpu)
-        Methods.jellyfish_merge(Methods.get_files(self.out_folder + '/jellyfish/', ['.jf']),
-                                self.out_folder + '/jellyfish/')
-        '''
+        # Assemble kmers to reduce the number of sequences to map later, since this is the longest part
+        print('Assembling kmers with tadpole...')
+        assembly_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers_assembly.fasta'
+        Methods.assemble(fasta_kmer_file, assembly_file, self.mem, self.cpu)
 
-        # check all kmers for each unique sequence
-        kmer_dict = dict([])
-        for ident, seq in self.seq_dict.items():
-            cnt_list = list()
-            kmers = Methods.sliding_window(seq, 21, step=1)
-            for kmer in kmers:
-                cnt = Methods.jellyfish_query(kmer, self.out_folder + '/jellyfish/exclusion_merged.jf')
-                cnt_list.append(int(cnt))
-            kmer_dict[ident] = cnt_list
+        # Use mapping to get the unique and conserved bases from the CIGAR string
+        # Pick one genome randomly from the exclusion group
+        # all kmers will be tested against this genome to find differences (insertion, deletion and mismatches)
+        ref = self.exclusion_fasta_list[randint(0, len(self.exclusion_fasta_list) - 1)]
+        index_prefix = '.'.join(ref.split('.')[:-1])
 
-        # Create a pattern to return a condensed representation of the coverage (0 or >0)
-        # Something like the CIRGAR string in the SAM format
-        # 21U51C would mean 21 bases with zero coverage in the exclusion group (Unique to inclusion)
-        # and 51 bases with coverage in the exclusion group (Common to exclusion)
-        # that would tell that using 21-mers there is 1 bp difference at position 21.
-        # it not perfect because if there are more than 1 difference within 21 bp, we can't know how many exactly
-        coverage_dict = dict()
-        coverage_string = ''
-        for ident, cnts in kmer_dict.items():
-            # report the counts of consecutive zero and non-zero values
-            coverage_list = []
-            counter = 0
-            zero = 0  # track if the previous values was a zero (1) or not (0)
-            for cnt in cnts:
-                if cnt == 0 and zero == 0:  # hit a new zero value
-                    if counter > 0:
-                        # coverage_string = coverage_string + str(counter) + 'C'
-                        coverage_list.append((counter, 'C'))
-                    counter = 1  # reset counter
-                    zero = 1
-                elif cnt == 0 and zero == 1:  # hit a consecutive zero value
-                    counter += 1
-                elif cnt > 0 and zero == 1:  # hit a new non-zero value
-                    if counter > 0:
-                        # coverage_string = coverage_string + str(counter) + 'U'
-                        coverage_list.append((counter, 'U'))
-                    counter = 1
-                    zero = 0
-                elif cnt > 0 and zero == 0:  # hit a consecutive non-zero value
-                    counter += 1
-            if counter > 0 and zero == 1:
-                # coverage_string = coverage_string + str(counter) + 'U'
-                coverage_list.append((counter, 'U'))
-            elif counter > 0 and zero == 0:
-                # coverage_string = coverage_string + str(counter) + 'C'
-                coverage_list.append((counter, 'C'))
-            coverage_dict[ident] = coverage_list
+        print('Indexing exclusion genome (picked one randomly: {})...'.format(os.path.basename(index_prefix)))
+        Methods.index_bowtie2(ref, index_prefix, self.cpu)
 
-        # find More interesting kmers
-        print('Filtering kmers...')
-        with open(self.out_folder + '/best_kmers.fasta', 'w') as f:
-            best_kmers_dict = dict()
-            for ident, cnt_tuples in coverage_dict.items():
-                if len(cnt_tuples) > 3:
-                    best_kmers_dict[ident] = cnt_tuples
-                    f.write('>{} {}\n{}\n'.format(ident, cnt_tuples, self.seq_dict[ident]))
-                    continue
-                # or if the "U-values" are > 2
-                else:
-                    for cnt, cov_type in cnt_tuples:
-                        if cov_type == 'U' and cnt > 21:
-                            best_kmers_dict[ident] = cnt_tuples
-                            f.write('>{} {}\n{}\n'.format(ident, cnt_tuples, self.seq_dict[ident]))
+        print('Mapping assembled kmers...')
+        # parse assembly file to dictionary
+        assembly_dict = Methods.fasta_2_dict(assembly_file)
+        Methods.parallel_map_bowtie2(self.out_folder + '/bam', index_prefix, assembly_dict, self.cpu, '-F')
 
-        # output best kmer
-        # print('Writing best (most diverse) inclusion-specific kmers...')
-        # Methods.dict_to_fasta(best_kmers_dict,
-        #                       self.out_folder + '/best_kmers.fasta')
+        bam_list = glob(self.out_folder + '/bam' + '/*.bam')
+        print('Filtering assembled kmers by looking at cigar strings...')
+        with open(self.out_folder + '/best_kmers.fasta', 'wt') as best_fh:
+            for bam in bam_list:
+                ident = '.'.join(os.path.basename(bam).split('.')[:-1])
+                sam_file = pysam.AlignmentFile(bam, 'rb')
 
-        # Create jelly database of exclusion genomes
-        # Methods.find_unique_regions(self.seq_dict)
+                for s in sam_file:
+                    cigar_list = s.cigar
+                    """
+                    M   0   alignment match (can be a sequence match or mismatch)
+                    I   1   insertion to the reference
+                    D   2   deletion from the reference
+                    N   3   skipped region from the reference
+                    S   4   soft clipping (clipped sequences present in SEQ)
+                    H   5   hard clipping (clipped sequences NOT present in SEQ)
+                    P   6   padding (silent deletion from padded reference)
+                    =   7   sequence match
+                    X   8   sequence mismatch
+                    """
+                    if len([x for x, y in cigar_list if x == 8]) > 1:
+                        # Assuming that a tuple starting with 8 is followed by a tuple starting with 7 and them a 8
+                        for i, c in enumerate(cigar_list):
+                            if c[0] == 8:
+                                # of two mismatched regions are less than 21 bp apart
+                                if i < len(cigar_list)-3 and cigar_list[i+2][0] == 8 and cigar_list[i+1][1] < 21:
+                                    print('>{} {}\n{}\n'.format(ident, Methods.tuple_to_cirgar(cigar_list),
+                                                                Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                    best_fh.write('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                                        Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                    break
+                    elif len(cigar_list) == 1 and cigar_list[0][0] == 8:  # All kmer is unique!
+                        print('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                    Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                        best_fh.write('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                            Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                    else:  # Mixture of matches and mismatches
+                        for c in cigar_list:
+                            if c[0] == 8 and c[1] > 1:  # Two or more consecutive mismatches
+                                print('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                            Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                best_fh.write('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                                    Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                break  # no need to check others if present. This is already good
+                            elif c[0] == 1 and c[1] > 1:  # insertion > 1bp
+                                print('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                            Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                best_fh.write('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                                    Methods.lower_diff(cigar_list,
+                                                                                       assembly_dict[ident])))
+                                break  # no need to check others if present. This is already good
+                            elif c[0] == 2 and c[1] > 1:  # deletion > 1bp
+                                print('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                            Methods.lower_diff(cigar_list, assembly_dict[ident])))
+                                best_fh.write('>{} {}\n{}\n'.format(ident,  Methods.tuple_to_cirgar(cigar_list),
+                                                                    Methods.lower_diff(cigar_list,
+                                                                                       assembly_dict[ident])))
+                                break  # no need to check others if present. This is already good
 
-        # find stretches of consecutive bases
-        # Will be used to force a primer or probe location
-        # Since Sourmash uses only perfect matches, retained kmers can only have 1 bp difference
-        # Thus hard to get selective in a real PCR
+        rmtree(self.out_folder + '/bam')
+        bt2_files = glob(self.exclusion + '/*.bt2')
+        for f in bt2_files:
+            os.remove(f)
+
+        # TODO -> Find an automated way to pick the best candidate kmers
+        #         not too sure what to prioritize? Insertions, deletions or mismatches?
+        # TODO -> Automatocally create qPCR assays with Primer3
+        #         Have to make sure that the regions with insertions, deletions or mismatches
+        #         are in the primers (3' end ideally) or in the probe. I think it's better if the specificity
+        #         is comming from the primers than the probe, but have no evidence for that!
+        # TODO -> Test the qPCR assays. Maybe with the in silico PCR?
+        #         Score the assays and sort the with the best first
+
         print('Done!')
 
 
 if __name__ == "__main__":
     max_cpu = cpu_count()
+    max_mem = int(virtual_memory().total * 0.85 / 1000000000)  # in GB
 
     parser = ArgumentParser(description='Find group specific qPCR assays from fasta files')
     parser.add_argument('-i', '--inclusion', metavar='/inclusion_folder/',
@@ -216,16 +224,16 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--threads', metavar=str(max_cpu),
                         required=False,
                         type=int, default=max_cpu,
-                        help='Number of CPU.'
-                             'Default is maximum CPU available({})'.format(max_cpu))
+                        help='Number of CPU. Default is maximum CPU available({})'.format(max_cpu))
+    parser.add_argument('-m', '--memory', metavar=str(max_cpu),
+                        required=False,
+                        type=int, default=max_mem,
+                        help='Memory in GB. Default is 85% of total memory ({})'.format(max_mem))
     parser.add_argument('-k', '--kmer_size',
                         required=False,
                         default='99',
                         help='kmer size to use for Mash. Default 99.')
-    parser.add_argument('-s', '--sketch_size',
-                        required=False,
-                        default='1000',
-                        help='Sketch size to use for Mash. Default 1000.')
+
     # Get the arguments into an object
     arguments = parser.parse_args()
 
