@@ -10,6 +10,16 @@ import os
 import pathlib
 from concurrent import futures
 from shutil import copyfileobj
+import pysam
+from collections import OrderedDict
+
+
+class KmerObject(object):
+    def __init__(self, ident, desc, seq):
+        # Create seq object with its attributes
+        self.ident = ident
+        self.desc = desc
+        self.seq = seq
 
 
 class Methods(object):
@@ -47,11 +57,6 @@ class Methods(object):
 
     @staticmethod
     def check_fasta(fasta):
-        """
-        Check if fasta file has a valid format
-        :param fasta:
-        :return:
-        """
         status = 0
 
         with gzip.open(fasta, 'rt') if fasta.endswith('.gz') else open(fasta, 'r') as f:
@@ -59,6 +64,20 @@ class Methods(object):
             if first_line.startswith('>'):
                 status = 1
 
+        return status
+
+    @staticmethod
+    def check_ref(fasta, exclusion_list):
+        status = 0
+
+        # Check if used absolute path
+        file_path = os.path.dirname(fasta)
+        if not file_path:
+            status = 0
+
+        # check if in exclusion list
+        if fasta in exclusion_list:
+            status = 1
         return status
 
     @staticmethod
@@ -185,19 +204,35 @@ class Methods(object):
         subprocess.run(cmd)
 
     @staticmethod
-    def jellyfish_merge(jf_list, folder):
-        cmd = ['jellyfish', 'merge', '-o', folder + '/exclusion_merged.jf'] + jf_list
+    def jellyfish_count_parallel(fasta_list, output_folder, cpu, kmer_size, cnt):
+        # Create folder
+        Methods.create_output_folders(output_folder)
+
+        with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
+            args = ((genome, output_folder + '.'.join(os.path.basename(genome).split('.')[:-1]) + '.jf', 1,
+                     kmer_size, cnt) for genome in fasta_list)
+            for results in executor.map(lambda x: Methods.jellyfish_count(*x), args):
+                pass
+
+    @staticmethod
+    def jellyfish_merge(jf_list, output_file, cnt):
+        cmd = ['jellyfish', 'merge', '-o', output_file, '-L', str(cnt)] + jf_list
         subprocess.run(cmd)
 
         # Delete individual jellyfish database files
-        for f in jf_list:
-            os.remove(f)
+        # for f in jf_list:
+        #     os.remove(f)
 
     @staticmethod
     def jellyfish_dump(jf_db):
         cmd = ['jellyfish', 'dump', '-c', '-t', jf_db]
         results = subprocess.run(cmd, stdout=subprocess.PIPE)
         return {x.split('\t')[0]: x.split('\t')[1] for x in results.stdout.decode('ascii').split('\n') if x}
+
+    @staticmethod
+    def jellyfish_dump_to_file(jf_db, output_file):
+        cmd = ['jellyfish', 'dump', '-c', '-t', jf_db, '-o', output_file]
+        subprocess.run(cmd)
 
     @staticmethod
     def jellyfish_query(kmer, jf_db):
@@ -209,6 +244,7 @@ class Methods(object):
     @staticmethod
     def assemble(fasta_file, output_file, mem, cpu):
         cmd = ['tadpole.sh', 'Xmx{}g'.format(mem),
+               'overwrite=t',
                'threads={}'.format(cpu),
                'in={}'.format(fasta_file),
                'out={}'.format(output_file)]
@@ -236,33 +272,13 @@ class Methods(object):
         return my_dict
 
     @staticmethod
-    def sliding_window(sequence, win_size, step=1):
-        """
-        https://scipher.wordpress.com/2010/12/02/simple-sliding-window-iterator-in-python/
-
-        Returns a generator that will iterate through
-        the defined chunks of input sequence.  Input sequence
-        must be iterable.
-        """
-
-        # Verify the inputs
-        try:
-            it = iter(sequence)
-        except TypeError:
-            raise Exception("**ERROR** sequence must be iterable.")
-        if not ((type(win_size) == type(0)) and (type(step) == type(0))):
-            raise Exception("**ERROR** type(winSize) and type(step) must be int.")
-        if step > win_size:
-            raise Exception("**ERROR** step must not be larger than winSize.")
-        if win_size > len(sequence):
-            raise Exception("**ERROR** winSize must not be larger than sequence length.")
-
-        # Pre-compute number of chunks to emit
-        num_chunks = int(((len(sequence) - win_size) / step) + 1)
-
-        # Do the work
-        for i in range(0, num_chunks * step, step):
-            yield sequence[i:i + win_size]
+    def count_fasta_entries(fasta_file):
+        cnt = 0
+        with open(fasta_file, 'r') as f:
+            for line in f:
+                if line.startswith('>'):
+                    cnt +=1
+        return cnt
 
     @staticmethod
     def index_bowtie2(ref, prefix, cpu):
@@ -277,7 +293,7 @@ class Methods(object):
     #     return stdout
 
     @staticmethod
-    def map_bowtie2(ref_index, query, cpu, output_bam, filt):
+    def map_bowtie2(ref_index, query, cpu, output_bam):
         bowtie2_align_cmd = ['bowtie2',
                              '--very-sensitive',
                              '--xeq ',
@@ -286,7 +302,7 @@ class Methods(object):
                              '--threads', str(cpu)]
         samtools_view_cmd = ['samtools', 'view',
                              '-@', str(cpu),
-                             '-b', '-h', filt, '4', '-']
+                             '-b', '-h', '-']
         samtools_sort_cmd = ['samtools', 'sort',
                              '-@', str(cpu),
                              '-o', output_bam,
@@ -301,18 +317,14 @@ class Methods(object):
         p3.communicate()
 
     @staticmethod
-    def parallel_map_bowtie2(output_folder, ref, seq_dict, cpu, filt):
+    def parallel_map_bowtie2(output_folder, ref, seq_dict, cpu):
         Methods.create_output_folders(output_folder)
 
         with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
-            args = ((ref, seq, 1, output_folder + '/' + ident + '.bam', filt) for ident, seq in seq_dict.items())
+            args = ((ref, seq, 1, output_folder + '/' + ident + '.bam') for ident, seq in seq_dict.items())
             # ref_index, query, cpu, output_bam
             for results in executor.map(lambda x: Methods.map_bowtie2(*x), args):
                 pass
-
-    @staticmethod
-    def mpileup():
-        pass
 
     @staticmethod
     def lower_diff(tuple_list, seq):
@@ -344,10 +356,63 @@ class Methods(object):
         return str(''.join(cigar))
 
     @staticmethod
-    def find_unique_regions(seq_dict):
-        import difflib
-        for ident, seq in seq_dict.items():
-            pass
+    def filter_kmers(assembly_dict, bam_list):
+        filtered_dict = dict()
+        for bam in bam_list:
+            ident = '.'.join(os.path.basename(bam).split('.')[:-1])
+            sam_file = pysam.AlignmentFile(bam, 'rb')
+
+            for s in sam_file:
+                cigar_list = s.cigar
+                """
+                M   0   alignment match (can be a sequence match or mismatch)
+                I   1   insertion to the reference
+                D   2   deletion from the reference
+                N   3   skipped region from the reference
+                S   4   soft clipping (clipped sequences present in SEQ)
+                H   5   hard clipping (clipped sequences NOT present in SEQ)
+                P   6   padding (silent deletion from padded reference)
+                =   7   sequence match
+                X   8   sequence mismatch
+                """
+                if not cigar_list:  # All kmer is unique!
+                    filtered_dict[ident] = KmerObject(ident, str(s.query_length) + 'I',
+                                                      assembly_dict[ident].lower())
+                elif len([x for x, y in cigar_list if x == 8]) > 1:
+                    # Assuming that a tuple starting with 8 is followed by a tuple starting with 7 and them a 8
+                    for i, c in enumerate(cigar_list):
+                        if c[0] == 8:
+                            # of two mismatched regions are less than 21 bp apart
+                            if i < len(cigar_list) - 3\
+                                    and cigar_list[i + 2][0] in (8, 1, 2)\
+                                    and cigar_list[i + 1][1] < 21:
+                                filtered_dict[ident] = KmerObject(ident, Methods.tuple_to_cirgar(cigar_list),
+                                                                  Methods.lower_diff(cigar_list, assembly_dict[ident]))
+                                break
+                # elif len(cigar_list) == 1 and cigar_list[0][0] in (1, 2, 8):  # All kmer is unique!
+                #     filtered_dict[ident] = KmerObject(ident, Methods.tuple_to_cirgar(cigar_list),
+                #                                       Methods.lower_diff(cigar_list, assembly_dict[ident]))
+                else:  # Mixture of matches and mismatches
+                    for c in cigar_list:
+                        if c[0] == 8 and c[1] > 1:  # Two or more consecutive mismatches
+                            filtered_dict[ident] = KmerObject(ident, Methods.tuple_to_cirgar(cigar_list),
+                                                              Methods.lower_diff(cigar_list, assembly_dict[ident]))
+                            break  # no need to check others if present. This is already good
+                        elif c[0] == 1 and c[1] > 1:  # insertion > 1bp
+                            filtered_dict[ident] = KmerObject(ident, Methods.tuple_to_cirgar(cigar_list),
+                                                              Methods.lower_diff(cigar_list, assembly_dict[ident]))
+                            break  # no need to check others if present. This is already good
+                        elif c[0] == 2 and c[1] > 1:  # deletion > 1bp
+                            filtered_dict[ident] = KmerObject(ident, Methods.tuple_to_cirgar(cigar_list),
+                                                              Methods.lower_diff(cigar_list, assembly_dict[ident]))
+                            break  # no need to check others if present. This is already good
+        return filtered_dict
+
+    @staticmethod
+    def sort_best_kmers(filtered_dict):
+        # Just using length of cigar string to do the sorting
+        ordered_dict = OrderedDict(sorted(filtered_dict.items(), key=lambda x: len(x[1].desc), reverse=True))
+        return ordered_dict
 
     @staticmethod
     def create_primer3_setting_file(setting_file, seq_id, seq):
@@ -370,7 +435,7 @@ class Methods(object):
             'PRIMER_MAX_NS_ACCEPTED': '1',
             'PRIMER_PRODUCT_SIZE_RANGE': '75-100',
             'P3_FILE_FLAG': '1',
-            'SEQUENCE_INTERNAL_EXCLUDED_REGION':'37,21',
+            'SEQUENCE_INTERNAL_EXCLUDED_REGION': '37,21',
             'PRIMER_EXPLAIN_FLAG': '1'
         }
 
@@ -399,20 +464,40 @@ class Methods(object):
                 f.write('{}\n'.format(l))
 
     @staticmethod
-    def run_kmc(list_file, output_file, work_dir, kmer_size, cpu, mem):
+    def run_kmc(list_file, output_file, work_dir, kmer_size, cpu, mem, min_cnt):
         cmd = ['kmc', '-k{}'.format(kmer_size),
                '-t{}'.format(cpu),
                '-m{}'.format(mem),
-               '-fa',
+               '-fm',
+               '-ci{}'.format(min_cnt),
                '@{}'.format(list_file),
                output_file, work_dir]
-        subprocess.run(cmd)
+        subprocess.run(cmd)  #), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
     def kmc_subtract(db1, db2, out_db, cpu):
-        cmd = ['kmc_tools', '-t', str(cpu), '-hp', 'simple',
-               db1, '-ci2',
-               db2, '-ci2',
-               'kmers_substract',
+        cmd = ['kmc_tools', '-t{}'.format(cpu), '-hp', 'simple',
+               db1, db2,
+               'kmers_subtract',
                out_db]
-        subprocess.run(cmd)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def kmc_transform(db, output_fasta, cpu):
+        cmd = ['kmc_tools', '-t{}'.format(cpu), '-hp', 'transform',
+               db,
+               'dump',
+               output_fasta]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def dump_to_fasta(dmp, fasta):
+        cnt = 0
+        with open(fasta, 'w') as o:
+            with open(dmp, 'r') as i:
+                for line in i:
+                    line = line.rstrip()
+                    if line == '':
+                        continue
+                    o.write('>{}\n{}\n'.format('kmer_' + str(cnt), line.split()[0]))
+                    cnt += 1
