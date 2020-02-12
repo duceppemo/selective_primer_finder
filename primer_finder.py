@@ -10,6 +10,7 @@
 # conda install kmc
 # conda install jellyfish
 # conda install psutil
+# conda install biopython
 
 
 from argparse import ArgumentParser
@@ -45,7 +46,17 @@ class PrimerFinder(object):
         self.run()
 
     def run(self):
+        self.run_checks()
+        fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
+        assembly_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers_assembly.fasta'
+        # self.run_kmc(fasta_kmer_file)
+        # self.run_assembly(fasta_kmer_file, assembly_file)
+        ordered_dict = self.filter_mapping(assembly_file)
+        self.filter_blast(ordered_dict)
 
+        print('Done!')
+
+    def run_checks(self):
         print('Checking a few things...')
         # Check if number of CPU and memory requested are valid
         self.cpu = Methods.check_cpus(self.cpu)
@@ -76,6 +87,7 @@ class PrimerFinder(object):
             if result == 0:
                 raise Exception('Please provide the absolute path of a file selected from the exclusion folder')
 
+    def run_kmc(self, fasta_kmer_file):
         # Using kmc
         Methods.create_output_folders(self.out_folder)
         Methods.create_output_folders(self.out_folder + '/kmc')
@@ -85,14 +97,15 @@ class PrimerFinder(object):
         Methods.run_kmc(self.out_folder + '/inclusion_list.txt',
                         self.out_folder + '/inclusion',
                         self.out_folder + '/kmc/',
-                        self.kmer_size, self.cpu, self.mem, len(self.inclusion_fasta_list))
+                        self.kmer_size, self.cpu, self.mem,
+                        len(self.inclusion_fasta_list), len(self.inclusion_fasta_list))
 
         print('Running KMC on exclusion group...')
         Methods.list_to_file(self.exclusion_fasta_list, self.out_folder + '/exclusion_list.txt')
         Methods.run_kmc(self.out_folder + '/exclusion_list.txt',
                         self.out_folder + '/exclusion',
                         self.out_folder + '/kmc/',
-                        self.kmer_size, self.cpu, self.mem, 1)
+                        self.kmer_size, self.cpu, self.mem, 1, '1e9')
 
         print('Finding inclusion-specific kmers...')
         Methods.kmc_subtract(self.out_folder + '/inclusion',
@@ -102,67 +115,21 @@ class PrimerFinder(object):
 
         # Dump kmers
         dump_file = self.out_folder + '/dump.txt'
-        fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
         Methods.kmc_transform(self.out_folder + '/inclusion-specific', dump_file, self.cpu)
         # convert dump file to fasta
         Methods.dump_to_fasta(dump_file, fasta_kmer_file)
 
-        # Using Jellyfish
-        # Methods.create_output_folders(self.out_folder)
-        # Methods.create_output_folders(self.out_folder + '/jellyfish')
-        # print('Running Jellyfish on inclusion group...')
-        # Only keep the kemrs that are in all genomes of inclusion group
-        # comparing kmer counts to number of inclusion for that purpose
-        # Not perfect since a kmer can be found multiple times in a single genome
-        # Methods.jellyfish_count_parallel(self.inclusion_fasta_list, self.out_folder + '/jellyfish/inclusion/',
-        #                                  self.cpu, self.kmer_size, 1)
-        # jf_list = glob(self.out_folder + '/jellyfish/inclusion' + '/*.jf')
-        # Methods.jellyfish_merge(jf_list, self.out_folder + '/jellyfish/inclusion_merged.jf',
-        #                         len(self.inclusion_fasta_list))
-        # Methods.jellyfish_count(self.out_folder + '/tmp.fasta',
-        #                         self.out_folder + '/jellyfish/inclusion_merged.jf',
-        #                         self.cpu, self.kmer_size, len(self.inclusion_fasta_list))  # Not perfect
-        # os.remove(self.out_folder + '/tmp.fasta')
-        #
-        # # Any kmer present at least 1 time in the exclusion group will we remove from the inclusion group
-        # Methods.cat_files(self.exclusion_fasta_list, self.out_folder + '/tmp.fasta')
-        # print('Running Jellyfish on exclusion group...')
-        # Methods.jellyfish_count(self.out_folder + '/tmp.fasta',
-        #                         self.out_folder + '/jellyfish/exclusion_merged.jf',
-        #                         self.cpu, self.kmer_size, 1)
-        # os.remove(self.out_folder + '/tmp.fasta')
-        #
-        # # Dump kmers to dictionary
-        # print('Dumping inclusion kmers to dictionary...')
-        # incl_dict = Methods.jellyfish_dump(self.out_folder + '/jellyfish/inclusion_merged.jf')
-        # print('Dumping exclusion kmers to dictionary...')
-        # Methods.jellyfish_dump_to_file(self.out_folder + '/jellyfish/exclusion_merged.jf',
-        #                                self.out_folder + '/jellyfish/exclusion_merged.cnt')
-        # excl_dict = Methods.jellyfish_dump(self.out_folder + '/jellyfish/exclusion_merged.jf')
-        #
-        # # Delete jellyfish database files
-        # rmtree(self.out_folder + '/jellyfish')
-        #
-        # # Subtract exclusion kmers to the inclusion kmers
-        # print('Subtracting kmers...')
-        # self.seq_dict = {str(i): key for i, key in enumerate(incl_dict.keys()) if key not in excl_dict.keys()}
-        #
-        # # Write kmer to file in fasta format
-        # fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
-        # if self.seq_dict:
-        #     Methods.dict_to_fasta(self.seq_dict, fasta_kmer_file)
-        # else:
-        #     raise Exception('No unique kmers found...')
-
+    def run_assembly(self, fasta_kmer_file, assembly_file):
         # Assemble kmers to reduce the number of sequences to map later, since this is the longest part
-        print('Assembling {} kmers with tadpole...'.format(Methods.count_fasta_entries(fasta_kmer_file)))
-        assembly_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers_assembly.fasta'
-        Methods.assemble(fasta_kmer_file, assembly_file, self.mem, self.cpu)
+        print('Assembling {} kmers...'.format(Methods.count_fasta_entries(fasta_kmer_file)))
+        # Methods.assemble_tadpole(fasta_kmer_file, assembly_file, self.mem, self.cpu)
+        Methods.assemble_skesa(fasta_kmer_file, assembly_file, self.mem, self.cpu)
 
         # Check if assembly file empty
         if os.stat(assembly_file).st_size == 0:
             raise Exception('kmers could not be assembled.')
 
+    def filter_mapping(self, assembly_file):
         # Use mapping to get the unique and conserved bases from the CIGAR string
         # Pick one genome randomly from the exclusion group
         # all kmers will be tested against this genome to find differences (insertion, deletion and mismatches)
@@ -202,6 +169,9 @@ class PrimerFinder(object):
         for f in bt2_files:
             os.remove(f)
 
+        return ordered_dict
+
+    def filter_blast(self, ordered_dict):
         # TODO -> Find an automated way to pick the best candidate kmers
         #         not too sure what to prioritize? Insertions, deletions or mismatches?
         # TODO -> Automatocally create qPCR assays with Primer3
@@ -211,7 +181,46 @@ class PrimerFinder(object):
         # TODO -> Test the qPCR assays. Maybe with the in silico PCR?
         #         Score the assays and sort the with the best first
 
-        print('Done!')
+        # Further filter kmers using blast
+        print('Filtering kmers using blast...')
+        # Merge all exclusion genomes into a single file and make a blast database with it
+        blast_out = self.out_folder + '/blast'
+        Methods.create_output_folders(blast_out)
+
+        # First: check if assembled inclusion kmers are in all inclusion genomes
+        # Only keep the shared ones
+        # TODO ->  This part I'm working on right now.
+        print('\tIndexing blast database of all inclusion genomes...')
+        blast_handle_list = list()
+        for incl_genome in self.inclusion_fasta_list:
+            Methods.makeblastdb(incl_genome)
+            blast_handle_incl = Methods.run_blastn(incl_genome,
+                                                   self.out_folder + '/best_kmers.fasta',
+                                                   self.cpu,
+                                                   len(self.inclusion_fasta_list))
+            blast_handle_list.append(blast_handle_incl)
+
+        in_all_incl_list = list()
+        for blast_handle in blast_handle_list:
+            found = Methods.is_positive_hit(blast_handle)
+            in_all_incl_list.append(found[0])
+
+            # Check if the in_all_incl_list returns all True
+            # if not, drop the assembled kmer
+
+        # Second: check if different from all exclusion genomes
+        print('\tIndexing blast database of all exclusion genomes...')
+        Methods.cat_files(self.exclusion_fasta_list, blast_out + '/exclusion_merged.fasta')
+        Methods.makeblastdb(blast_out + '/exclusion_merged.fasta')
+
+        # Run the blast
+        print('\tRunning blast...')
+        blast_handle = Methods.run_blastn(blast_out + '/exclusion_merged.fasta',
+                                          self.out_folder + '/best_kmers.fasta',
+                                          self.cpu,
+                                          len(self.exclusion_fasta_list))
+        print('\tFiltering blast results...')
+        Methods.filter_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ from concurrent import futures
 from shutil import copyfileobj
 import pysam
 from collections import OrderedDict
+from Bio.Blast.Applications import NcbiblastnCommandline
+from Bio import SearchIO
+from io import StringIO
 
 
 class KmerObject(object):
@@ -242,12 +245,17 @@ class Methods(object):
         return cnt
 
     @staticmethod
-    def assemble(fasta_file, output_file, mem, cpu):
+    def assemble_tadpole(fasta_file, output_file, mem, cpu):
         cmd = ['tadpole.sh', 'Xmx{}g'.format(mem),
                'overwrite=t',
                'threads={}'.format(cpu),
                'in={}'.format(fasta_file),
                'out={}'.format(output_file)]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def assemble_skesa(fasta_file, output_file, mem, cpu):
+        cmd = ['skesa', '--cores', str(cpu), '--mem', str(mem), '--fasta', fasta_file, '--contigs_out', output_file]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
@@ -464,12 +472,13 @@ class Methods(object):
                 f.write('{}\n'.format(l))
 
     @staticmethod
-    def run_kmc(list_file, output_file, work_dir, kmer_size, cpu, mem, min_cnt):
+    def run_kmc(list_file, output_file, work_dir, kmer_size, cpu, mem, min_cnt, max_cnt):
         cmd = ['kmc', '-k{}'.format(kmer_size),
                '-t{}'.format(cpu),
                '-m{}'.format(mem),
                '-fm',
                '-ci{}'.format(min_cnt),
+               '-cx{}'.format(max_cnt),
                '@{}'.format(list_file),
                output_file, work_dir]
         subprocess.run(cmd)  #), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -501,3 +510,90 @@ class Methods(object):
                         continue
                     o.write('>{}\n{}\n'.format('kmer_' + str(cnt), line.split()[0]))
                     cnt += 1
+
+    @staticmethod
+    def makeblastdb(fasta):
+        cmd = ['makeblastdb', '-in', fasta, '-dbtype', 'nucl']
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def run_blastn(ref_db, query, cpu, max_targets):
+        """
+        Perform blastn using biopython
+        :param ref_db: A fasta file for which "makeblastdb' was already run
+        :param query: Protein fasta file
+        :return: blast handle
+        """
+        # if max_targets > 20:
+        #     max_targets = 20  # limit number of sequences to compare
+
+        blastn = NcbiblastnCommandline(db=ref_db, query=query, evalue='1e-10',
+                                       outfmt=5, max_target_seqs=max_targets,
+                                       num_threads=cpu)
+        (stdout, stderr) = blastn()
+        if stderr:
+            raise Exception('There was a problem with the blast:\n{}'.format(stderr))
+        blast_handle = None
+        if stdout.find('Hsp') != -1:
+            # Convert stdout (string; blastp output in xml format) to IO object
+            blast_handle = StringIO(stdout)
+        return blast_handle
+
+    @staticmethod
+    def filter_blast(blast_handle, output_file, ordered_dict):
+        from collections import defaultdict
+        records_dict = SearchIO.to_dict(SearchIO.parse(blast_handle, 'blast-xml'))
+
+        with open(output_file, 'w') as f:
+            for seq_id, qresult in records_dict.items():
+                # query_len = qresult.seq_len
+                similarity_dict = defaultdict(list)
+                if not qresult.hsps:  # query is not in blast database
+                    seq = ordered_dict[seq_id].seq
+                    desc = ordered_dict[seq_id].desc
+                    f.write('>{} {}\n{}\n'.format(seq_id, desc, seq))
+                    continue
+                for h in qresult.hsps:
+                    similarity_dict[seq_id].append(h.aln_annotation['similarity'])
+
+                index_list = list()
+                common_variants = list()
+                for seq_id, sim_string_list in similarity_dict.items():
+                    for s in sim_string_list:
+                        # index of mismatches
+                        idx = [i for i, char in enumerate(s) if char != '|']
+                        index_list.append(idx)
+                    for i in index_list[0]:
+                        if all([i in sublist for sublist in index_list]):
+                            common_variants.append(i)
+                    if len(common_variants) > 1:
+                        for i, p in enumerate(common_variants):
+                            if i < len(common_variants) - 3\
+                                    and common_variants[i + 1] - common_variants[i] < 21:
+                                seq = ordered_dict[seq_id].seq
+                                # make lower at indexes
+                                f.write('>{} {}\n{}\n'.format(seq_id, common_variants,
+                                                              Methods.lower_indexes(seq.upper(), common_variants)))
+                                break
+
+    @staticmethod
+    def is_positive_hit(blast_handle):
+        records_dict = SearchIO.to_dict(SearchIO.parse(blast_handle, 'blast-xml'))
+        for seq_id, qresult in records_dict.items():
+            if qresult.hsps:
+                found = (seq_id, True)
+            else:
+                found = (seq_id, False)
+                # Maybe do some additional checks about the quality and/or length of the match
+        return found
+
+    @staticmethod
+    def lower_indexes(string, index_list):
+        out_string = ''
+        for i, char in enumerate(string):
+            if i in index_list:
+                out_string += char.lower()
+            else:
+                out_string += char
+        return out_string
+
