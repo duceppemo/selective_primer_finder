@@ -49,8 +49,8 @@ class PrimerFinder(object):
         self.run_checks()
         fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
         assembly_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers_assembly.fasta'
-        # self.run_kmc(fasta_kmer_file)
-        # self.run_assembly(fasta_kmer_file, assembly_file)
+        self.run_kmc(fasta_kmer_file)
+        self.run_assembly(fasta_kmer_file, assembly_file)
         ordered_dict = self.filter_mapping(assembly_file)
         self.filter_blast(ordered_dict)
 
@@ -130,8 +130,22 @@ class PrimerFinder(object):
             raise Exception('kmers could not be assembled.')
 
     def filter_mapping(self, assembly_file):
+        """
+        To know what makes the assembled kmer specific to the inclusion group:
+          - is it just one SNP?
+          - is the whole assembled kmer unique to the inclusion group?
+          - is it a multiple SNPs and indels?
+          - How far apart there variants are from each other?
+          - Can we get a stretch of at least 3 variants within 21 nucleotides to design selective primers?
+
+        The one drawback of this method is that it only uses one exclution genome to check for the variants.
+        Those variants may not be present in all exclusion genomes
+
+        :param assembly_file: string; fasta file of assembled kmers
+        :return: Ordered dictionary; contains the assembled kmers which are passing retention criteria for primer design
+        """
+
         # Use mapping to get the unique and conserved bases from the CIGAR string
-        # Pick one genome randomly from the exclusion group
         # all kmers will be tested against this genome to find differences (insertion, deletion and mismatches)
         if self.ref:
             excl_ref = self.ref
@@ -139,7 +153,10 @@ class PrimerFinder(object):
             excl_ref = self.exclusion_fasta_list[randint(0, len(self.exclusion_fasta_list) - 1)]
         index_prefix = '.'.join(excl_ref.split('.')[:-1])
 
-        print('Indexing exclusion genome (picked one randomly: {})...'.format(os.path.basename(index_prefix)))
+        if self.ref:
+            print('Indexing selected exclusion genome: {}...'.format(os.path.basename(index_prefix)))
+        else:
+            print('Indexing exclusion genome (picked one randomly: {})...'.format(os.path.basename(index_prefix)))
         Methods.index_bowtie2(excl_ref, index_prefix, self.cpu)
 
         print('Mapping {} assembled kmers...'.format(Methods.count_fasta_entries(assembly_file)))
@@ -172,15 +189,13 @@ class PrimerFinder(object):
         return ordered_dict
 
     def filter_blast(self, ordered_dict):
-        # TODO -> Find an automated way to pick the best candidate kmers
-        #         not too sure what to prioritize? Insertions, deletions or mismatches?
-        # TODO -> Automatocally create qPCR assays with Primer3
-        #         Have to make sure that the regions with insertions, deletions or mismatches
-        #         are in the primers (3' end ideally) or in the probe. I think it's better if the specificity
-        #         is comming from the primers than the probe, but have no evidence for that!
-        # TODO -> Test the qPCR assays. Maybe with the in silico PCR?
-        #         Score the assays and sort the with the best first
+        """
+        This is an attempt to consider all inclusion and all exclusion genomes to keep only the assembled
+        kmers that are the most likely to generate inclusion specific PCR assays.
 
+        :param ordered_dict: Ordered dictionary; pre-filtered assembled kmers
+        :return: None
+        """
         # Further filter kmers using blast
         print('Filtering kmers using blast...')
         # Merge all exclusion genomes into a single file and make a blast database with it
@@ -189,24 +204,44 @@ class PrimerFinder(object):
 
         # First: check if assembled inclusion kmers are in all inclusion genomes
         # Only keep the shared ones
-        # TODO ->  This part I'm working on right now.
-        print('\tIndexing blast database of all inclusion genomes...')
-        blast_handle_list = list()
+        print('\tChecking assembled kmer presence in all inclusion genomes...')
+        blast_incl_dict = dict()
+        # TODO -> make parallel
         for incl_genome in self.inclusion_fasta_list:
+            print('\t\t{}'.format(os.path.basename(incl_genome)))
             Methods.makeblastdb(incl_genome)
             blast_handle_incl = Methods.run_blastn(incl_genome,
                                                    self.out_folder + '/best_kmers.fasta',
                                                    self.cpu,
                                                    len(self.inclusion_fasta_list))
-            blast_handle_list.append(blast_handle_incl)
+            if blast_handle_incl:
+                # Which genomes harbour which assembled kmers?
+                blast_incl_dict[os.path.basename(incl_genome)] = Methods.is_positive_hit(blast_handle_incl)
+            else:
+                # None of the assembled kmers are found in that specific inclusion genome!!!
+                blast_incl_dict[os.path.basename(incl_genome)] = ''
+            Methods.clean_blast_index_files(incl_genome)
 
-        in_all_incl_list = list()
-        for blast_handle in blast_handle_list:
-            found = Methods.is_positive_hit(blast_handle)
-            in_all_incl_list.append(found[0])
+        # Check if the in_all_incl_list returns all True
+        # if not, drop the assembled kmer
+        incl_dict = dict()
+        for incl, tupple_list in blast_incl_dict.items():
+            for t in tupple_list:
+                contig = t[0]
+                present = t[1]
+                try:
+                    incl_dict[contig].append(present)
+                except KeyError:
+                    incl_dict[contig] = [present]
 
-            # Check if the in_all_incl_list returns all True
-            # if not, drop the assembled kmer
+        all_incl_out = self.out_folder + '/all_inclusion_contigs.fasta'
+        with open(all_incl_out, 'w') as f:
+            for contig, present_list in incl_dict.items():
+                # print('{}: {}'.format(contig, present_list))
+                if all(present_list):
+                    # Write to file
+                    # use that file for following steps
+                    f.write('>{}\n{}\n'.format(contig, ordered_dict[contig].seq))
 
         # Second: check if different from all exclusion genomes
         print('\tIndexing blast database of all exclusion genomes...')
@@ -216,11 +251,22 @@ class PrimerFinder(object):
         # Run the blast
         print('\tRunning blast...')
         blast_handle = Methods.run_blastn(blast_out + '/exclusion_merged.fasta',
-                                          self.out_folder + '/best_kmers.fasta',
+                                          # self.out_folder + '/best_kmers.fasta',
+                                          all_incl_out,
                                           self.cpu,
                                           len(self.exclusion_fasta_list))
+        Methods.clean_blast_index_files(blast_out + '/exclusion_merged.fasta')
         print('\tFiltering blast results...')
         Methods.filter_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
+
+    # TODO -> Find an automated way to pick the best candidate kmers
+    #         not too sure what to prioritize? Insertions, deletions or mismatches?
+    # TODO -> Automatocally create qPCR assays with Primer3
+    #         Have to make sure that the regions with insertions, deletions or mismatches
+    #         are in the primers (3' end ideally) or in the probe. I think it's better if the specificity
+    #         is comming from the primers than the probe, but have no evidence for that!
+    # TODO -> Test the qPCR assays. Maybe with the in silico PCR?
+    #         Score the assays and sort the with the best first
 
 
 if __name__ == "__main__":

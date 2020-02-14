@@ -517,11 +517,24 @@ class Methods(object):
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
+    def clean_blast_index_files(fasta):
+        remove_list = list()
+        remove_list += glob(fasta + '*.nhr')
+        remove_list += glob(fasta + '*.nin')
+        remove_list += glob(fasta + '*.nsq')
+        remove_list += glob(fasta + '*.nal')
+
+        for f in remove_list:
+            os.remove(f)
+
+    @staticmethod
     def run_blastn(ref_db, query, cpu, max_targets):
         """
         Perform blastn using biopython
         :param ref_db: A fasta file for which "makeblastdb' was already run
         :param query: Protein fasta file
+        :param cpu: number of threads
+        :param max_targets: maximum targets returned by blast
         :return: blast handle
         """
         # if max_targets > 20:
@@ -533,10 +546,11 @@ class Methods(object):
         (stdout, stderr) = blastn()
         if stderr:
             raise Exception('There was a problem with the blast:\n{}'.format(stderr))
-        blast_handle = None
-        if stdout.find('Hsp') != -1:
-            # Convert stdout (string; blastp output in xml format) to IO object
-            blast_handle = StringIO(stdout)
+        # blast_handle = None
+        # if stdout.find('Hsp') != -1:
+        #     # Convert stdout (string; blastp output in xml format) to IO object
+        #     blast_handle = StringIO(stdout)
+        blast_handle = StringIO(stdout)
         return blast_handle
 
     @staticmethod
@@ -578,14 +592,15 @@ class Methods(object):
 
     @staticmethod
     def is_positive_hit(blast_handle):
+        found_list = list()
         records_dict = SearchIO.to_dict(SearchIO.parse(blast_handle, 'blast-xml'))
         for seq_id, qresult in records_dict.items():
             if qresult.hsps:
-                found = (seq_id, True)
+                found = found_list.append((seq_id, True))
             else:
-                found = (seq_id, False)
+                found = found_list.append((seq_id, False))
                 # Maybe do some additional checks about the quality and/or length of the match
-        return found
+        return found_list
 
     @staticmethod
     def lower_indexes(string, index_list):
