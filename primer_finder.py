@@ -1,14 +1,12 @@
 #!/usr/local/env python3
 
 # Dependencies
-# conda install bbmap
 # conda install pigz
 # pip install pysam
 # conda install blast
 # conda install bowtie2
 # conda install samtools
 # conda install kmc
-# conda install jellyfish
 # conda install psutil
 # conda install biopython
 
@@ -16,13 +14,11 @@
 from argparse import ArgumentParser
 from multiprocessing import cpu_count
 from primer_finder_methods import Methods
-import os
-import sys
 from glob import glob
 from shutil import rmtree
 from random import randint
 from psutil import virtual_memory
-from collections import OrderedDict
+import os
 
 
 class PrimerFinder(object):
@@ -258,6 +254,12 @@ class PrimerFinder(object):
         Methods.clean_blast_index_files(blast_out + '/exclusion_merged.fasta')
         print('\tFiltering blast results...')
         Methods.filter_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
+        print(
+            'Final nuber of contigs: {}...'.format(Methods.count_fasta_entries(self.out_folder + '/final_kmers.fasta')))
+
+        # removed merged exlusion genomes file
+        os.remove(blast_out + '/exclusion_merged.fasta')
+
 
     # TODO -> Find an automated way to pick the best candidate kmers
     #         not too sure what to prioritize? Insertions, deletions or mismatches?

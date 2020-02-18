@@ -121,73 +121,6 @@ class Methods(object):
         pathlib.Path(output).mkdir(parents=True, exist_ok=True)
 
     @staticmethod
-    def sourmash_compute(num_hashes, ksizes, output, input_fasta):
-        cmd = ['sourmash', 'compute', '-n', str(num_hashes), '-p', str(1),
-               '-k', str(ksizes), '-o', output, input_fasta]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-
-    @staticmethod
-    def parallel_sourmash_compute(fasta_list, output_folder, cpu, kmer, sketch):
-        # Create folder
-        Methods.create_output_folders(output_folder)
-
-        with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
-            args = ((sketch, kmer, output_folder + '.'.join(os.path.basename(genome).split('.')[:-1]) + '.sig',
-                   genome) for genome in fasta_list)
-            # sourmash_compute(num_hashes, ksizes, output, input_fasta)
-            for results in executor.map(lambda x: Methods.sourmash_compute(*x), args):
-                pass
-
-    @staticmethod
-    def sourmash_signature_intersect(incl_sig_list, out_sig):
-        """
-        TODO -> log output
-        :param incl_sig_list: list of signature files made from the inclusion group
-        :param out_sig: file containing the common signatures
-        :return:
-        """
-
-        cmd = ['sourmash', 'signature', 'intersect', '-o', out_sig] + incl_sig_list
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-
-    @staticmethod
-    def sourmash_signature_subtract(incl_sig, excl_sig_list, out_sig):
-        """
-        TODO -> log output
-        :param incl_sig: file containing the common signatures
-        :param excl_sig_list: list of signature files made from the exclusion group
-        :param out_sig: file containing the inclusion-specific signatures
-        :return:
-        """
-        cmd = ['sourmash', 'signature', 'subtract', '-o', out_sig, incl_sig] + excl_sig_list
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-
-    @staticmethod
-    def sourmash_signature_to_kmer(out_csv, in_sig, genome):
-        """
-        Fetch the sequences linked to the signatures
-        :param out_csv:
-        :param in_sig:
-        :param genome:
-        :return:
-        """
-        # Where sourmash is installed
-        # install_path = which('sourmash')
-        # sig2kmer = install_path + '/utils/signature-to-kmers.py'
-        sig2kmer = '/home/bioinfo/prog/sourmash/utils/signature-to-kmers.py'
-        cmd = ['python3', sig2kmer, '--output-kmers', out_csv, in_sig, genome]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-
-    @staticmethod
-    def parse_cvs(csv_file, seq_dict):
-        with open(csv_file, 'r') as f:
-            f.readline()  # skip header
-            for line in f:
-                line = line.rstrip()
-                field_list = line.split(',')
-                seq_dict[field_list[1]] = field_list[0]
-
-    @staticmethod
     def dict_to_fasta(seq_dict, fasta_file):
         with open(fasta_file, 'w') as f:
             for k, v in seq_dict.items():
@@ -198,60 +131,6 @@ class Methods(object):
         with open(output_file, 'w') as f:
             for fasta in fasta_list:
                 copyfileobj(open(fasta, 'r'), f)
-
-    @staticmethod
-    def jellyfish_count(seq_file, count_file, cpu, kmer_size, cnt):
-        cmd = ['jellyfish', 'count', '-L', str(cnt), '-m', str(kmer_size),
-               '-s 100M', '-t', str(cpu), '-C', '-o', count_file, seq_file]
-
-        subprocess.run(cmd)
-
-    @staticmethod
-    def jellyfish_count_parallel(fasta_list, output_folder, cpu, kmer_size, cnt):
-        # Create folder
-        Methods.create_output_folders(output_folder)
-
-        with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
-            args = ((genome, output_folder + '.'.join(os.path.basename(genome).split('.')[:-1]) + '.jf', 1,
-                     kmer_size, cnt) for genome in fasta_list)
-            for results in executor.map(lambda x: Methods.jellyfish_count(*x), args):
-                pass
-
-    @staticmethod
-    def jellyfish_merge(jf_list, output_file, cnt):
-        cmd = ['jellyfish', 'merge', '-o', output_file, '-L', str(cnt)] + jf_list
-        subprocess.run(cmd)
-
-        # Delete individual jellyfish database files
-        # for f in jf_list:
-        #     os.remove(f)
-
-    @staticmethod
-    def jellyfish_dump(jf_db):
-        cmd = ['jellyfish', 'dump', '-c', '-t', jf_db]
-        results = subprocess.run(cmd, stdout=subprocess.PIPE)
-        return {x.split('\t')[0]: x.split('\t')[1] for x in results.stdout.decode('ascii').split('\n') if x}
-
-    @staticmethod
-    def jellyfish_dump_to_file(jf_db, output_file):
-        cmd = ['jellyfish', 'dump', '-c', '-t', jf_db, '-o', output_file]
-        subprocess.run(cmd)
-
-    @staticmethod
-    def jellyfish_query(kmer, jf_db):
-        cmd = ['jellyfish', 'query', jf_db, kmer]
-        results = subprocess.run(cmd, stdout=subprocess.PIPE)
-        cnt = results.stdout.rstrip().decode('ascii').split(' ')[1]
-        return cnt
-
-    @staticmethod
-    def assemble_tadpole(fasta_file, output_file, mem, cpu):
-        cmd = ['tadpole.sh', 'Xmx{}g'.format(mem),
-               'overwrite=t',
-               'threads={}'.format(cpu),
-               'in={}'.format(fasta_file),
-               'out={}'.format(output_file)]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
     def assemble_skesa(fasta_file, output_file, mem, cpu):
@@ -292,13 +171,6 @@ class Methods(object):
     def index_bowtie2(ref, prefix, cpu):
         cmd = ['bowtie2-build', '--threads', str(cpu), ref, prefix]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-
-    # @staticmethod
-    # def map_bowtie2(ref_index, query, cpu):
-    #     cmd = ['bowtie2', '--very-sensitive', '-x', ref_index, '-f', query, '--threads', str(cpu)]
-    #     p = subprocess.Popen(cmd)
-    #     (stdout, stderr) = p.communicate()
-    #     return stdout
 
     @staticmethod
     def map_bowtie2(ref_index, query, cpu, output_bam):
