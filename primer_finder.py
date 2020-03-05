@@ -1,18 +1,5 @@
 #!/usr/local/env python3
 
-# Dependencies
-# python=3.7
-# conda install pigz=2.4
-# conda install pysam=0.15.4
-# conda install blast=2.9.0
-# conda install bowtie2=2.3.5
-# conda install samtools=1.9
-# conda install kmc=3.1.1
-# conda install psutil=5.7.0
-# conda install skesa=2.3.0
-# conda install minimap2=2.17
-
-
 from argparse import ArgumentParser
 from multiprocessing import cpu_count
 from primer_finder_methods import Methods
@@ -316,7 +303,7 @@ if __name__ == "__main__":
                         required=True,
                         help='Folder that contains the genomes they assay should amplify')
     parser.add_argument('-e', '--exclusion', metavar='/exclusion_folder/',
-                        required=False,
+                        required=True,
                         help='Folder that contains the genomes the assay should not amplify')
     parser.add_argument('-o', '--output', metavar='/output_folder/',
                         required=True,
@@ -329,15 +316,18 @@ if __name__ == "__main__":
                         required=False,
                         type=int, default=max_mem,
                         help='Memory in GB. Default is 85%% of total memory ({})'.format(max_mem))
-    parser.add_argument('-k', '--kmer_size',
+    parser.add_argument('-k', '--kmer_size', metavar=99,
                         required=False,
                         default='99',
-                        help='kmer size to use for Mash. Default 99.')
-    parser.add_argument('-d', '--duplication', metavar='',
+                        help='kmer size to use for KMC (1-256). Default 99.')
+    parser.add_argument('-d', '--duplication', metavar='1',
                         required=False,
                         type=int, default=1,
                         help='Maximum number of times a kmer can be found in each inclusion genome. '
-                             'Default is 1 time, meaning repeated regions are discarded.')
+                             'Default is 1, meaning repeated regions are discarded.')
+    parser.add_argument('-r', '--reference', metavar='/exclusion_folder/exclusion_genome.fasta',
+                        required=False,
+                        help='Force a specific exclusion genome to map the assembled kmers to')
 
     # Get the arguments into an object
     arguments = parser.parse_args()

@@ -15,7 +15,7 @@ from collections import OrderedDict
 from Bio.Blast.Applications import NcbiblastnCommandline
 from Bio import SearchIO
 from io import StringIO
-import ahocorasick
+# import ahocorasick
 
 
 class KmerObject(object):
