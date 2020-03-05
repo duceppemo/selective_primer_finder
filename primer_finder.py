@@ -1,14 +1,16 @@
 #!/usr/local/env python3
 
 # Dependencies
-# conda install pigz
-# pip install pysam
-# conda install blast
-# conda install bowtie2
-# conda install samtools
-# conda install kmc
-# conda install psutil
-# conda install biopython
+# python=3.7
+# conda install pigz=2.4
+# conda install pysam=0.15.4
+# conda install blast=2.9.0
+# conda install bowtie2=2.3.5
+# conda install samtools=1.9
+# conda install kmc=3.1.1
+# conda install psutil=5.7.0
+# conda install skesa=2.3.0
+# conda install minimap2=2.17
 
 
 from argparse import ArgumentParser
@@ -31,6 +33,7 @@ class PrimerFinder(object):
         self.mem = args.memory
         self.kmer_size = args.kmer_size
         self.ref = args.reference
+        self.dup = args.duplication
 
         # Data
         self.inclusion_fasta_list = list()
@@ -83,42 +86,63 @@ class PrimerFinder(object):
             if result == 0:
                 raise Exception('Please provide the absolute path of a file selected from the exclusion folder')
 
+        # Check if kmer size is between 1 and 256
+        if 1 > int(self.kmer_size) > 260:
+            raise Exception('Valid kmer sizes are integer from 1 to 256')
+
     def run_kmc(self, fasta_kmer_file):
         # Using kmc
         Methods.create_output_folders(self.out_folder)
         Methods.create_output_folders(self.out_folder + '/kmc')
 
-        print('Running KMC on inclusion group...')
+        print('\nRunning KMC on inclusion group...')
         Methods.list_to_file(self.inclusion_fasta_list, self.out_folder + '/inclusion_list.txt')
         Methods.run_kmc(self.out_folder + '/inclusion_list.txt',
                         self.out_folder + '/inclusion',
                         self.out_folder + '/kmc/',
                         self.kmer_size, self.cpu, self.mem,
-                        len(self.inclusion_fasta_list), len(self.inclusion_fasta_list))
+                        len(self.inclusion_fasta_list), len(self.inclusion_fasta_list) * self.dup)
 
-        print('Running KMC on exclusion group...')
+        print('\nRunning KMC on exclusion group...')
         Methods.list_to_file(self.exclusion_fasta_list, self.out_folder + '/exclusion_list.txt')
         Methods.run_kmc(self.out_folder + '/exclusion_list.txt',
                         self.out_folder + '/exclusion',
                         self.out_folder + '/kmc/',
                         self.kmer_size, self.cpu, self.mem, 1, '1e9')
 
-        print('Finding inclusion-specific kmers...')
+        print('\nFinding inclusion-specific kmers (subtracting exclusion from inclusion kmers)...')
         Methods.kmc_subtract(self.out_folder + '/inclusion',
                              self.out_folder + '/exclusion',
                              self.out_folder + '/inclusion-specific',
                              self.cpu)
 
         # Dump kmers
+        print('\nDumping kmers to file...')
         dump_file = self.out_folder + '/dump.txt'
         Methods.kmc_transform(self.out_folder + '/inclusion-specific', dump_file, self.cpu)
+
+        # Check if dump file is empty
+        if os.stat(dump_file).st_size == 0:
+            raise Exception('Could not find inclusion-specific kmers!')
+
+        # Count line number in dump file
+        dmp_lines = 0
+        with open(dump_file, 'r', encoding='utf-8', errors='ignore') as f:
+            dmp_lines = sum(bl.count("\n") for bl in Methods.count_lines_in_file(f))
+
+        # Only keep kmers present in all inclusion genomes
+        print('\n{} kmers were dumped'.format(dmp_lines))
+
         # convert dump file to fasta
+        print('Converting dump file to fasta...')
         Methods.dump_to_fasta(dump_file, fasta_kmer_file)
 
+        # Clean up
+        rmtree(self.out_folder + '/kmc')
+
     def run_assembly(self, fasta_kmer_file, assembly_file):
-        # Assemble kmers to reduce the number of sequences to map later, since this is the longest part
-        print('Assembling {} kmers...'.format(Methods.count_fasta_entries(fasta_kmer_file)))
-        # Methods.assemble_tadpole(fasta_kmer_file, assembly_file, self.mem, self.cpu)
+        # Assemble kmers to reduce the number of sequences to map in a later step
+        print('\nAssembling {} kmers...'.format(Methods.count_fasta_entries(fasta_kmer_file)))
         Methods.assemble_skesa(fasta_kmer_file, assembly_file, self.mem, self.cpu)
 
         # Check if assembly file empty
@@ -155,10 +179,21 @@ class PrimerFinder(object):
             print('Indexing exclusion genome (picked one randomly: {})...'.format(os.path.basename(index_prefix)))
         Methods.index_bowtie2(excl_ref, index_prefix, self.cpu)
 
+        # split assembly file
+        fasta_folder = self.out_folder + '/fasta'
+        Methods.split_fasta(assembly_file, fasta_folder)
+
         print('Mapping {} assembled kmers...'.format(Methods.count_fasta_entries(assembly_file)))
         # parse assembly file to dictionary
         assembly_dict = Methods.fasta_2_dict(assembly_file)
-        Methods.parallel_map_bowtie2(self.out_folder + '/bam', index_prefix, assembly_dict, self.cpu)
+
+        bam_folder = self.out_folder + '/bam'
+        # Methods.parallel_map_bowtie2(bam_folder, index_prefix, fasta_folder, self.cpu)
+        # output_folder, ref, fasta_folder, cpu
+        Methods.parallel_map_minimap2(bam_folder, excl_ref, fasta_folder, self.cpu)
+
+        # Cleanup fasta files
+        rmtree(self.out_folder + '/fasta')
 
         print('Filtering assembled kmers by looking at cigar strings...')
         bam_list = glob(self.out_folder + '/bam' + '/*.bam')
@@ -204,7 +239,7 @@ class PrimerFinder(object):
         blast_incl_dict = dict()
         # TODO -> make parallel
         for incl_genome in self.inclusion_fasta_list:
-            print('\t\t{}'.format(os.path.basename(incl_genome)))
+            # print('\t\t{}'.format(os.path.basename(incl_genome)))
             Methods.makeblastdb(incl_genome)
             blast_handle_incl = Methods.run_blastn(incl_genome,
                                                    self.out_folder + '/best_kmers.fasta',
@@ -255,10 +290,11 @@ class PrimerFinder(object):
         print('\tFiltering blast results...')
         Methods.filter_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
         print(
-            'Final nuber of contigs: {}...'.format(Methods.count_fasta_entries(self.out_folder + '/final_kmers.fasta')))
+            'Final number of contigs: {}'.format(Methods.count_fasta_entries(self.out_folder + '/final_kmers.fasta')))
 
         # removed merged exlusion genomes file
-        os.remove(blast_out + '/exclusion_merged.fasta')
+        rmtree(blast_out)
+        # os.remove(blast_out + '/exclusion_merged.fasta')
 
 
     # TODO -> Find an automated way to pick the best candidate kmers
@@ -289,18 +325,19 @@ if __name__ == "__main__":
                         required=False,
                         type=int, default=max_cpu,
                         help='Number of CPU. Default is maximum CPU available({})'.format(max_cpu))
-    parser.add_argument('-m', '--memory', metavar=str(max_cpu),
+    parser.add_argument('-m', '--memory', metavar=str(max_mem),
                         required=False,
                         type=int, default=max_mem,
-                        help='Memory in GB. Default is 85% of total memory ({})'.format(max_mem))
+                        help='Memory in GB. Default is 85%% of total memory ({})'.format(max_mem))
     parser.add_argument('-k', '--kmer_size',
                         required=False,
                         default='99',
                         help='kmer size to use for Mash. Default 99.')
-    parser.add_argument('-r', '--reference', metavar='/exclusion_folder/exclusion_genome.fasta',
+    parser.add_argument('-d', '--duplication', metavar='',
                         required=False,
-                        help='Force a specific genome from exclusion group to be used for variant identification. '
-                             'Default: pick on randomly. Must use absolute path.')
+                        type=int, default=1,
+                        help='Maximum number of times a kmer can be found in each inclusion genome. '
+                             'Default is 1 time, meaning repeated regions are discarded.')
 
     # Get the arguments into an object
     arguments = parser.parse_args()

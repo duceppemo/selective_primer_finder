@@ -15,6 +15,7 @@ from collections import OrderedDict
 from Bio.Blast.Applications import NcbiblastnCommandline
 from Bio import SearchIO
 from io import StringIO
+import ahocorasick
 
 
 class KmerObject(object):
@@ -164,8 +165,16 @@ class Methods(object):
         with open(fasta_file, 'r') as f:
             for line in f:
                 if line.startswith('>'):
-                    cnt +=1
+                    cnt += 1
         return cnt
+
+    @staticmethod
+    def count_lines_in_file(my_file, size=65536):
+        while True:
+            b = my_file.read(size)
+            if not b:
+                break
+            yield b
 
     @staticmethod
     def index_bowtie2(ref, prefix, cpu):
@@ -174,11 +183,23 @@ class Methods(object):
 
     @staticmethod
     def map_bowtie2(ref_index, query, cpu, output_bam):
+        """
+        Can run into an error with bowtie2 if the contigs are too long.
+        TODO -> write sequences to fasta files instead of passing them as strings
+
+        :param ref_index:
+        :param query:
+        :param cpu:
+        :param output_bam:
+        :return:
+        """
+
         bowtie2_align_cmd = ['bowtie2',
+                             '--mm',
                              '--very-sensitive',
                              '--xeq ',
                              '-x', ref_index,
-                             '-c', query,
+                             '-f', query,
                              '--threads', str(cpu)]
         samtools_view_cmd = ['samtools', 'view',
                              '-@', str(cpu),
@@ -197,14 +218,70 @@ class Methods(object):
         p3.communicate()
 
     @staticmethod
-    def parallel_map_bowtie2(output_folder, ref, seq_dict, cpu):
+    def parallel_map_bowtie2(output_folder, ref, fasta_folder, cpu):
         Methods.create_output_folders(output_folder)
 
         with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
-            args = ((ref, seq, 1, output_folder + '/' + ident + '.bam') for ident, seq in seq_dict.items())
+            args = ((ref, fasta_file, 1, output_folder + '/' + '.'.join(os.path.basename(fasta_file).split('.')[0]) + '.bam')
+                    for fasta_file in glob(fasta_folder + '/*.fasta'))
             # ref_index, query, cpu, output_bam
             for results in executor.map(lambda x: Methods.map_bowtie2(*x), args):
                 pass
+
+    @staticmethod
+    def map_minimap2(ref, query, cpu, output_bam):
+        minimap2_align_cmd = ['minimap2',
+                              '-t', str(cpu),
+                              '-a', '--eqx',
+                              ref, query]
+        samtools_view_cmd = ['samtools', 'view',
+                             '-@', str(cpu),
+                             '-b', '-h', '-']
+        samtools_sort_cmd = ['samtools', 'sort',
+                             '-@', str(cpu),
+                             '-o', output_bam,
+                             '-']
+        p1 = subprocess.Popen(minimap2_align_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        p2 = subprocess.Popen(samtools_view_cmd, stdin=p1.stdout, stdout=subprocess.PIPE)
+        p1.stdout.close()
+        p3 = subprocess.Popen(samtools_sort_cmd, stdin=p2.stdout, stdout=subprocess.PIPE)
+        p2.stdout.close()
+        p3.communicate()
+
+    @staticmethod
+    def parallel_map_minimap2(output_folder, ref, fasta_folder, cpu):
+        Methods.create_output_folders(output_folder)
+        with futures.ThreadPoolExecutor(max_workers=cpu) as executor:
+            args = ((ref, fasta_file, 1, output_folder + '/' + '.'.join(os.path.basename(fasta_file).split('.')[:-1]) + '.bam')
+                    for fasta_file in glob(fasta_folder + '/*.fasta'))
+            # ref, query, cpu, output_bam
+            for results in executor.map(lambda x: Methods.map_minimap2(*x), args):
+                pass
+
+    @staticmethod
+    def split_fasta(input_fasta, output_folder):
+        Methods.create_output_folders(output_folder)
+        with open(input_fasta, 'r') as ifh:
+            header = ''
+            seq = list()
+            for line in ifh:
+                line = line.rstrip()
+                if not line:
+                    continue
+                if line.startswith('>') and not seq:  # first entry
+                    header = line.split()[0].replace('>', '')
+                elif line.startswith('>') and seq:  # just getting to a new entry
+                    outfile = output_folder + '/' + header + '.fasta'
+                    with open(outfile, 'w') as ofh:
+                        ofh.write('>{}\n{}\n'.format(header, ''.join(seq)))
+                    header = line.split()[0].replace('>', '')
+                    seq = list()
+                else:
+                    seq.append(line)
+            else:  # last entry
+                outfile = output_folder + '/' + header + '.fasta'
+                with open(outfile, 'w') as ofh:
+                    ofh.write('>{}\n{}\n'.format(header, ''.join(seq)))
 
     @staticmethod
     def lower_diff(tuple_list, seq):
@@ -227,6 +304,10 @@ class Methods(object):
         convert = {
             '1': 'I',  # insertion
             '2': 'D',  # deletion
+            '3': 'N',  # skipped
+            '4': 'S',  # soft clipped
+            '5': 'H',  # hard clipped
+            '6': 'P',  # padding
             '7': '=',  # match
             '8': 'X'   # mismatch
         }
@@ -353,19 +434,19 @@ class Methods(object):
                '-cx{}'.format(max_cnt),
                '@{}'.format(list_file),
                output_file, work_dir]
-        subprocess.run(cmd)  #), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        subprocess.run(cmd)  # ), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
     def kmc_subtract(db1, db2, out_db, cpu):
-        cmd = ['kmc_tools', '-t{}'.format(cpu), '-hp', 'simple',
+        cmd = ['kmc_tools', '-t{}'.format(cpu), 'simple',
                db1, db2,
                'kmers_subtract',
                out_db]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        subprocess.run(cmd)  # , stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
     def kmc_transform(db, output_fasta, cpu):
-        cmd = ['kmc_tools', '-t{}'.format(cpu), '-hp', 'transform',
+        cmd = ['kmc_tools', '-t{}'.format(cpu), 'transform',
                db,
                'dump',
                output_fasta]
@@ -416,7 +497,7 @@ class Methods(object):
                                        outfmt=5, max_target_seqs=max_targets,
                                        num_threads=cpu)
         (stdout, stderr) = blastn()
-        if stderr:
+        if stderr and not 'Warning' in stderr:
             raise Exception('There was a problem with the blast:\n{}'.format(stderr))
         # blast_handle = None
         # if stdout.find('Hsp') != -1:
@@ -440,6 +521,7 @@ class Methods(object):
                     f.write('>{} {}\n{}\n'.format(seq_id, desc, seq))
                     continue
                 for h in qresult.hsps:
+                    # Add check for alignment length
                     similarity_dict[seq_id].append(h.aln_annotation['similarity'])
 
                 index_list = list()
@@ -484,3 +566,81 @@ class Methods(object):
                 out_string += char
         return out_string
 
+    # Needle and hay stack
+    @staticmethod
+    def screen_kmc_kmers(f):
+        pass
+
+    @staticmethod
+    def reverse_complement(seq):
+        """
+        Generates the reverse complement of a given DNA sequence.
+        :param seq:
+        :return:
+        """
+        complement_dict = {
+            'A': 'T',
+            'C': 'G',
+            'G': 'C',
+            'T': 'A'}
+
+        return ''.join([complement_dict[base] for base in seq[::-1]])
+
+    @staticmethod
+    def create_haystack(fasta_file):
+        """
+
+        :param fasta_list:
+        :return:
+        """
+        seq = []
+        with open(fasta_file, 'r') as f:
+            for line in f:
+                if not line.startswith('>'):
+                    line = line.rstrip()
+                    seq.append(line)
+        return ''.join(seq)
+
+    @staticmethod
+    def create_needles(kmer_file):
+        aho = ahocorasick.Automaton()
+        i = 0
+        with open(kmer_file, 'r') as f:
+            for line in f:
+                kmer = line.split()[0]
+                kmer_rc = Methods.reverse_complement(kmer)  # A.add_word(key, (idx, key))
+                aho.add_word(kmer, (i, kmer))
+                i += 1
+                aho.add_word(kmer_rc, (i, kmer_rc))
+                i += 1
+        aho.make_automaton()
+        return aho
+
+    @staticmethod
+    def find_needles(kmer_file, fasta_list, fasta_kmer_file):
+        # To track if kmers are present in all inclusion genomes
+        kmer_dict = dict()
+        with open(kmer_file, 'r') as kf:
+            for line in kf:
+                line = line.rstrip()
+                (seq, cnt) = line.split()
+                kmer_dict[seq] = 0
+
+        aho = Methods.create_needles(kmer_file)
+        for fasta in fasta_list:
+            haystack = Methods.create_haystack(fasta)
+            for end_index, (insert_order, original_value) in aho.iter(haystack):
+                try:
+                    kmer_dict[original_value] += 1
+                except KeyError:
+                    try:
+                        kmer_dict[Methods.reverse_complement(original_value)] += 1
+                    except KeyError:
+                        pass
+
+        with open(fasta_kmer_file, 'w') as f:
+            i = 0
+            for seq, cnt in kmer_dict.items():
+                if cnt == len(fasta_list):
+                    f.write('>{}\n{}\n'.format(i, seq))
+                    i += 1
