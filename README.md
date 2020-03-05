@@ -1,5 +1,15 @@
 # selective_primer_finder
-Finds candidate kmers with high variability between an inclusion and an exclusion group to design qPCR assays.
+Finds candidate kmers with high variability between an inclusion and an exclusion group to design qPCR assays. This tool works as following:
+1. Extract shared kmers from inclusion genomes
+2. Extract all kmers from exclusion genomes
+3. Subtract exclusion kmers to inclusion kmers
+4. Dump inclusion-specific kmers and convert to fasta
+5. Assemble kmers into contigs
+6. Map contigs to an exclusion genome to identify the variants
+7. Filter contigs to only the keep the ones that have at least three variants within 21 bp (the average PCR primer length)
+8. Make sure that the remaining contigs are present in all inclusion genomes
+9. Further filter contigs to only keep the ones with variants conserved in all exclusion genomes (compensate for the fact that the variants are determined using a single exclusion genome)
+
 
 ## Installation
 Create and activate a python 3.6 conda virtual environment
@@ -42,4 +52,8 @@ optional arguments:
                         inclusion genome. Default is 1, meaning repeated
                         regions are discarded.
 ```
-                        
+## Output
+The output is a fasta file with inclusion-specific bases in lowercase. A cigar string is in the heard to help locate the variants.
+
+## TODO
+I would like the output to be a the qPCR assay _per se_. To do so, contigs in the current output file sould be sorted in a way that the sequence from which it would be the easiest to make an inclusion-specific qPCR assay should be first (those are the large insertions). I'm planing to run Primer3 to get the assays and validate them using _in silico_ PCR.
