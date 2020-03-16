@@ -261,6 +261,10 @@ class PrimerFinder(object):
                     # use that file for following steps
                     f.write('>{}\n{}\n'.format(contig, ordered_dict[contig].seq))
 
+        # Check if file is not empty
+        if os.stat(all_incl_out).st_size == 0:
+            raise Exception('No contigs are present in all inclusion genomes!')
+
         # Second: check if different from all exclusion genomes
         print('\tIndexing blast database of all exclusion genomes...')
         Methods.cat_files(self.exclusion_fasta_list, blast_out + '/exclusion_merged.fasta')
