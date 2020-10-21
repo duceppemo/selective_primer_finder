@@ -14,8 +14,8 @@ Finds candidate kmers with high variability between an inclusion and an exclusio
 ## Installation
 Create and activate a python 3.6 conda virtual environment
 ```
-conda create -n selectiver_primer_finder python=3.6
-conda activate selectiver_primer_finder
+conda create -n selective_primer_finder python=3.6
+conda activate selective_primer_finder
 ```
 Clone github repo
 ```
