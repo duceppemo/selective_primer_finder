@@ -53,6 +53,48 @@ optional arguments:
                         inclusion genome. Default is 1, meaning repeated
                         regions are discarded.
 ```
+
+## Input
+Here's an example about how to create the inclusion and exclusion folders in a semi-automated way, if you don't already have your inclusion and exclusion genomes separated:
+1. You need a sorted list of all the genomes you're planing to use (inclusion and exclusion):
+```
+# If all genomes are in a single folder:
+ls /all_genomes | sort > all.list
+
+# If you need to get just the ".fasta" files recursively from a "master folder":
+find -L  /all_genomes -type f -name "*.fasta" | sort > all.list  # "-L" is to grab the files present as symbolic links
+```
+2. You need a sorted text file with only your inclusion genomes:
+```
+# Make sure the list is sorted
+sort inclusion.list > inclusion.list1  # sort the file
+mv inclusion.list1 inclusion.list  # overwrite the original file with the sorted one
+
+# Create a sorted exclusion list
+# comm -3 big_file small_file > difference_file
+comm -3 all.list inclusion.list | sort > exclusion.list
+```
+3. Create symbolic links of your inclusion and exclusion genomes in their respective folder
+```
+# Create folders to be used as the inclusion and exclusion inputs for selective_primer_finder and populate it:
+[ -d inclusion/ ] || mkdir -p inclusion/
+[ -d exclusion/ ] || mkdir -p exclusion/
+
+# Inclusion
+rm inclusion/*
+for i in $(cat inclusion.list); do
+    find -L /all_genomes -type f -name "*"${i}"*" \
+    -exec ln -s {} inclusion/ \;
+done
+
+# Exclusion
+rm exclusion/*
+for i in $(cat exclusion.list); do
+    find -L /all_genomes -type f -name "*"${i}"*" \
+    -exec ln -s {} exclusion/ \;
+done
+```
+
 ## Output
 The output is a fasta file with inclusion-specific bases in lowercase. Positions of the variants are in the header of the sequences. The criteria to keep a sequence are the following:
 * Must have a least 2 bases difference withing 21 bp.
