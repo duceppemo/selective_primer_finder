@@ -102,4 +102,5 @@ The output is a fasta file with inclusion-specific bases in lowercase. Positions
 * Must be present in all samples in inclusion group.
 
 ## TODO
-I would like the output to be a the qPCR assay _per se_. To do so, contigs in the current output file sould be sorted in a way that the sequence from which it would be the easiest to make an inclusion-specific qPCR assay should be first (those are the large insertions). I'm planing to run Primer3 to get the assays and validate them using _in silico_ PCR.
+* Add the possibility to keep kmers that are not in 100% of the inclusion genomes. User could set a threshold.
+* I would like the output to be a the qPCR assay _per se_. To do so, contigs in the current output file sould be sorted in a way that the sequence from which it would be the easiest to make an inclusion-specific qPCR assay should be first (those are the large insertions). I'm planing to run Primer3 to get the assays and validate them using _in silico_ PCR.
