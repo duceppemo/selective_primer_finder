@@ -52,6 +52,8 @@ optional arguments:
                         Maximum number of times a kmer can be found in each
                         inclusion genome. Default is 1, meaning repeated
                         regions are discarded.
+  -a skesa, --assembler skesa
+                        Choose assembler: "skesa" or "spades".
 ```
 
 ## Input
