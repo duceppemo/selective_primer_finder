@@ -8,6 +8,7 @@ from shutil import rmtree
 from random import randint
 from psutil import virtual_memory
 import os
+import pandas as pd
 
 
 class PrimerFinder(object):
@@ -21,6 +22,7 @@ class PrimerFinder(object):
         self.kmer_size = args.kmer_size
         self.ref = args.reference
         self.dup = args.duplication
+        self.assembler = args.assembler
 
         # Data
         self.inclusion_fasta_list = list()
@@ -36,7 +38,7 @@ class PrimerFinder(object):
         fasta_kmer_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers.fasta'
         assembly_file = self.out_folder + '/inclusion-specific_' + self.kmer_size + '-mers_assembly.fasta'
         self.run_kmc(fasta_kmer_file)
-        self.run_assembly(fasta_kmer_file, assembly_file)
+        self.run_assembly(fasta_kmer_file, assembly_file, self.assembler)
         ordered_dict = self.filter_mapping(assembly_file)
         self.filter_blast(ordered_dict)
 
@@ -76,6 +78,9 @@ class PrimerFinder(object):
         # Check if kmer size is between 1 and 256
         if 1 > int(self.kmer_size) > 260:
             raise Exception('Valid kmer sizes are integer from 1 to 256')
+
+        if self.assembler not in ['skesa', 'spades']:
+            raise Exception('Please choose "skesa" or "spades" as assembler.')
 
     def run_kmc(self, fasta_kmer_file):
         # Using kmc
@@ -127,10 +132,18 @@ class PrimerFinder(object):
         # Clean up
         rmtree(self.out_folder + '/kmc')
 
-    def run_assembly(self, fasta_kmer_file, assembly_file):
+    def run_assembly(self, fasta_kmer_file, assembly_file, assembler):
         # Assemble kmers to reduce the number of sequences to map in a later step
-        print('\nAssembling {} kmers...'.format(Methods.count_fasta_entries(fasta_kmer_file)))
-        Methods.assemble_skesa(fasta_kmer_file, assembly_file, self.mem, self.cpu)
+        print('\nAssembling {} kmers with {}...'.format(Methods.count_fasta_entries(fasta_kmer_file), assembler))
+        if assembler == 'skesa':
+            Methods.assemble_skesa(fasta_kmer_file, assembly_file, self.mem, self.cpu)
+        else:  # spades
+            assembly_folder = os.path.dirname(assembly_file) + '/spades'
+            Methods.assemble_spades(fasta_kmer_file, assembly_folder, self.mem, self.cpu)
+            # move and rename assembly file
+            os.rename(os.path.dirname(assembly_file) + '/spades/contigs.fasta', assembly_file)
+            # delete assembly directory
+            rmtree(assembly_folder)
 
         # Check if assembly file empty
         if os.stat(assembly_file).st_size == 0:
@@ -240,6 +253,22 @@ class PrimerFinder(object):
                 blast_incl_dict[os.path.basename(incl_genome)] = ''
             Methods.clean_blast_index_files(incl_genome)
 
+        #############################
+        # Dump dictionary to TSV file to inspect presence absence manually if wanted
+        col_names = list(sorted(blast_incl_dict.keys()))
+        row_names = list(blast_incl_dict.values())[0]
+        row_names = [t[0] for t in row_names]
+        # Create empty dataframe
+        incl_df = pd.DataFrame(columns=col_names, index=row_names)
+        # Populate dataframe
+        for genome, tuple_list in blast_incl_dict.items():
+            for t in tuple_list:
+                contig = t[0]
+                presence = t[1]
+                incl_df.loc[contig, genome] = presence
+        tsv_file = self.out_folder + '/inclusion_blast_hits.tsv'
+        incl_df.to_csv(tsv_file, sep='\t', index=True)
+
         # Check if the in_all_incl_list returns all True
         # if not, drop the assembled kmer
         incl_dict = dict()
@@ -251,6 +280,7 @@ class PrimerFinder(object):
                     incl_dict[contig].append(present)
                 except KeyError:
                     incl_dict[contig] = [present]
+        #################################
 
         all_incl_out = self.out_folder + '/all_inclusion_contigs.fasta'
         with open(all_incl_out, 'w') as f:
@@ -270,7 +300,7 @@ class PrimerFinder(object):
         Methods.cat_files(self.exclusion_fasta_list, blast_out + '/exclusion_merged.fasta')
         Methods.makeblastdb(blast_out + '/exclusion_merged.fasta')
 
-        # Run the blast
+        # Blast the contigs shared by all inclusion genomes to the exclusion genomes
         print('\tRunning blast...')
         blast_handle = Methods.run_blastn(blast_out + '/exclusion_merged.fasta',
                                           # self.out_folder + '/best_kmers.fasta',
@@ -278,8 +308,11 @@ class PrimerFinder(object):
                                           self.cpu,
                                           len(self.exclusion_fasta_list))
         Methods.clean_blast_index_files(blast_out + '/exclusion_merged.fasta')
+
+        # Only keep contigs sharing variable positions
         print('\tFiltering blast results...')
-        Methods.filter_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
+        Methods.filter_by_blast(blast_handle, self.out_folder + '/final_kmers.fasta', ordered_dict)
+
         print(
             'Final number of contigs: {}'.format(Methods.count_fasta_entries(self.out_folder + '/final_kmers.fasta')))
 
@@ -332,6 +365,9 @@ if __name__ == "__main__":
     parser.add_argument('-r', '--reference', metavar='/exclusion_folder/exclusion_genome.fasta',
                         required=False,
                         help='Force a specific exclusion genome to map the assembled kmers to')
+    parser.add_argument('-a', '--assembler', metavar='skesa',
+                        required=False, default='skesa',
+                        help='Choose assembler: "skesa" or "spades".')
 
     # Get the arguments into an object
     arguments = parser.parse_args()

@@ -15,7 +15,7 @@ from collections import OrderedDict
 from Bio.Blast.Applications import NcbiblastnCommandline
 from Bio import SearchIO
 from io import StringIO
-# import ahocorasick
+import ahocorasick
 
 
 class KmerObject(object):
@@ -136,6 +136,11 @@ class Methods(object):
     @staticmethod
     def assemble_skesa(fasta_file, output_file, mem, cpu):
         cmd = ['skesa', '--cores', str(cpu), '--mem', str(mem), '--fasta', fasta_file, '--contigs_out', output_file]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    @staticmethod
+    def assemble_spades(fasta_file, output_dir, mem, cpu):
+        cmd = ['spades.py', '--s', '1', fasta_file, '--isolate', '--threads', str(cpu), '-o', output_dir]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     @staticmethod
@@ -507,7 +512,7 @@ class Methods(object):
         return blast_handle
 
     @staticmethod
-    def filter_blast(blast_handle, output_file, ordered_dict):
+    def filter_by_blast(blast_handle, output_file, ordered_dict):
         from collections import defaultdict
         records_dict = SearchIO.to_dict(SearchIO.parse(blast_handle, 'blast-xml'))
 
@@ -515,31 +520,43 @@ class Methods(object):
             for seq_id, qresult in records_dict.items():
                 # query_len = qresult.seq_len
                 similarity_dict = defaultdict(list)
-                if not qresult.hsps:  # query is not in blast database
+                # if inclusion contig has not hit in the exclusion genomes
+                if not qresult.hsps:
                     seq = ordered_dict[seq_id].seq
                     desc = ordered_dict[seq_id].desc
-                    f.write('>{} {}\n{}\n'.format(seq_id, desc, seq))
+                    f.write('>{} {}\n{}\n'.format(seq_id, desc, seq))  # write to to final file
                     continue
+                # If hits were found, save the alignments in a dictionary
+                # There's one hsp per exclusion genome
                 for h in qresult.hsps:
-                    # Add check for alignment length
+                    # TODO -> Add check for alignment length?
                     similarity_dict[seq_id].append(h.aln_annotation['similarity'])
+                    if h.evalue > 0.0000000001:
+                        print('>{} {}\n{}\n'.format(seq_id, desc, seq))
 
+                # Have a deeper look at the alignments
                 index_list = list()
                 common_variants = list()
                 for seq_id, sim_string_list in similarity_dict.items():
+                    # Grab the position of all the misalignments between the inclusion contig and the exclusion genome
                     for s in sim_string_list:
                         # index of mismatches
                         idx = [i for i, char in enumerate(s) if char != '|']
                         index_list.append(idx)
+                    # Only keep the mismatch position common for all exclusion genomes
                     for i in index_list[0]:
                         if all([i in sublist for sublist in index_list]):
                             common_variants.append(i)
+                    # A contig needs more than 1 variant nucleotide to be kept
                     if len(common_variants) > 1:
+                        # Check the distance between the variants
                         for i, p in enumerate(common_variants):
+                            # If there are more than 2 variants within 21 nucleotides, the inclusion contig is kept
                             if i < len(common_variants) - 3\
                                     and common_variants[i + 1] - common_variants[i] < 21:
                                 seq = ordered_dict[seq_id].seq
-                                # make lower at indexes
+                                # Variants positions are added to the fasta header
+                                # Variants are converted to lower in sequence. Non variable nucleotides are upper case
                                 f.write('>{} {}\n{}\n'.format(seq_id, common_variants,
                                                               Methods.lower_indexes(seq.upper(), common_variants)))
                                 break
@@ -549,10 +566,15 @@ class Methods(object):
         found_list = list()
         records_dict = SearchIO.to_dict(SearchIO.parse(blast_handle, 'blast-xml'))
         for seq_id, qresult in records_dict.items():
+            found = False
             if qresult.hsps:
-                found = found_list.append((seq_id, True))
+                for qr in qresult.hsps:
+                    if qr.evalue < 0.0000000001:  # 1e-10
+                        found = True
+                        break
+                found_list.append((seq_id, found))
             else:
-                found = found_list.append((seq_id, False))
+                found_list.append((seq_id, found))
                 # Maybe do some additional checks about the quality and/or length of the match
         return found_list
 
