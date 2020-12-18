@@ -544,9 +544,15 @@ class Methods(object):
                         idx = [i for i, char in enumerate(s) if char != '|']
                         index_list.append(idx)
                     # Only keep the mismatch position common for all exclusion genomes
+                    len_index_list = len(index_list)
                     for i in index_list[0]:
-                        if all([i in sublist for sublist in index_list]):
+                        # if all([i in sublist for sublist in index_list]):  # must in in 100%
+                        #     common_variants.append(i)
+                        presence_list = [i in sublist for sublist in index_list]
+                        # Check if in 90% of them
+                        if presence_list.count(True) / len(presence_list) >= 0.90:
                             common_variants.append(i)
+
                     # A contig needs more than 1 variant nucleotide to be kept
                     if len(common_variants) > 1:
                         # Check the distance between the variants

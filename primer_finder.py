@@ -87,7 +87,7 @@ class PrimerFinder(object):
         Methods.create_output_folders(self.out_folder)
         Methods.create_output_folders(self.out_folder + '/kmc')
 
-        print('\nRunning KMC on inclusion group...')
+        print('\nRunning KMC on inclusion group ({} genomes)...'.format(len(self.inclusion_fasta_list)))
         Methods.list_to_file(self.inclusion_fasta_list, self.out_folder + '/inclusion_list.txt')
         Methods.run_kmc(self.out_folder + '/inclusion_list.txt',
                         self.out_folder + '/inclusion',
@@ -95,7 +95,7 @@ class PrimerFinder(object):
                         self.kmer_size, self.cpu, self.mem,
                         len(self.inclusion_fasta_list), len(self.inclusion_fasta_list) * self.dup)
 
-        print('\nRunning KMC on exclusion group...')
+        print('\nRunning KMC on exclusion group ({} genomes)...'.format(len(self.exclusion_fasta_list)))
         Methods.list_to_file(self.exclusion_fasta_list, self.out_folder + '/exclusion_list.txt')
         Methods.run_kmc(self.out_folder + '/exclusion_list.txt',
                         self.out_folder + '/exclusion',
@@ -228,14 +228,14 @@ class PrimerFinder(object):
         :return: None
         """
         # Further filter kmers using blast
-        print('Filtering kmers using blast...')
+        print('Filtering contigs using blast...')
         # Merge all exclusion genomes into a single file and make a blast database with it
         blast_out = self.out_folder + '/blast'
         Methods.create_output_folders(blast_out)
 
         # First: check if assembled inclusion kmers are in all inclusion genomes
         # Only keep the shared ones
-        print('\tChecking assembled kmer presence in all inclusion genomes...')
+        print('\tChecking contigs presence in all inclusion genomes...')
         blast_incl_dict = dict()
         # TODO -> make parallel
         for incl_genome in self.inclusion_fasta_list:
