@@ -9,3 +9,4 @@ biopython=1.76
 bowtie2=2.4.1
 pyahocorasick=1.4.0
 pandas=1.1.5
+xlrd=2.0.1
