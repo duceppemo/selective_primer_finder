@@ -102,7 +102,7 @@ class PrimerFinder(object):
                         self.out_folder + '/kmc/',
                         self.kmer_size, self.cpu, self.mem, 1, '1e9')
 
-        print('\nFinding inclusion-specific kmers (subtracting exclusion from inclusion kmers)...')
+        print('\nFinding inclusion-specific kmers (subtracting exclusion from inclusion kmers)...')duceppe@inspection.gc.ca
         Methods.kmc_subtract(self.out_folder + '/inclusion',
                              self.out_folder + '/exclusion',
                              self.out_folder + '/inclusion-specific',
@@ -183,7 +183,7 @@ class PrimerFinder(object):
         fasta_folder = self.out_folder + '/fasta'
         Methods.split_fasta(assembly_file, fasta_folder)
 
-        print('Mapping {} assembled kmers...'.format(Methods.count_fasta_entries(assembly_file)))
+        print('Mapping {} contigs...'.format(Methods.count_fasta_entries(assembly_file)))
         # parse assembly file to dictionary
         assembly_dict = Methods.fasta_2_dict(assembly_file)
 
@@ -195,7 +195,7 @@ class PrimerFinder(object):
         # Cleanup fasta files
         rmtree(self.out_folder + '/fasta')
 
-        print('Filtering assembled kmers by looking at cigar strings...')
+        print('Filtering contigs by looking at cigar strings...')
         bam_list = glob(self.out_folder + '/bam' + '/*.bam')
         filtered_dict = Methods.filter_kmers(assembly_dict, bam_list)
 
