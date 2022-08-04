@@ -102,7 +102,7 @@ class PrimerFinder(object):
                         self.out_folder + '/kmc/',
                         self.kmer_size, self.cpu, self.mem, 1, '1e9')
 
-        print('\nFinding inclusion-specific kmers (subtracting exclusion from inclusion kmers)...')duceppe@inspection.gc.ca
+        print('\nFinding inclusion-specific kmers (subtracting exclusion from inclusion kmers)...')
         Methods.kmc_subtract(self.out_folder + '/inclusion',
                              self.out_folder + '/exclusion',
                              self.out_folder + '/inclusion-specific',
