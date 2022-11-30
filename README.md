@@ -1,14 +1,14 @@
 # selective_primer_finder
 Finds candidate kmers with high variability between an inclusion and an exclusion group to design qPCR assays. This tool works as following:
-1. Extract shared kmers from inclusion genomes
-2. Extract all kmers from exclusion genomes
-3. Subtract exclusion kmers to inclusion kmers
-4. Dump inclusion-specific kmers and convert to fasta
-5. Assemble kmers into contigs
-6. Map contigs to an exclusion genome to identify the variants
-7. Filter contigs to only the keep the ones that have at least three variants within 21 bp (the average PCR primer length)
-8. Make sure that the remaining contigs are present in all inclusion genomes
-9. Further filter contigs to only keep the ones with variants conserved in all exclusion genomes (compensate for the fact that the variants are determined using a single exclusion genome)
+1. Extract shared kmers from inclusion genomes (kmc)
+2. Extract all kmers from exclusion genomes (kmc)
+3. Subtract exclusion kmers to inclusion kmers (kmc)
+4. Dump inclusion-specific kmers and convert to fasta (kmc)
+5. Assemble kmers into contigs (skesa or spades)
+6. Map contigs to an exclusion genome to identify the variants (minimap2)
+7. Filter contigs to only the keep the ones that have at least three variants within 21 bp (the average PCR primer length) (samtools)
+8. Make sure that the remaining contigs are present in all inclusion genomes (blast)
+9. Further filter contigs to only keep the ones with variants conserved in all exclusion genomes (compensate for the fact that the variants are determined using a single exclusion genome) (blast)
 
 *Note* that `selective_primer_finder` is programmed in such a way that it will only keep perfect matches. In other words, a kmer needs to be present in ALL inclusion genomes, with no mismatches, and absent from ALL exclusion genomes. It is thus extremely sensitive the quality of the genomes used as input and proper assignement of genome to the inclusiosn and exclusion groups. Input genomes must be carefully currated to ensure proper results. A tool such as `genome_comparator` (https://github.com/duceppemo/genome_comparator) can be really helpful for that purpose.
 
