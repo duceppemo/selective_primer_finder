@@ -6,7 +6,7 @@ Finds candidate kmers with high variability between an inclusion and an exclusio
 4. Dump inclusion-specific kmers and convert to fasta (kmc)
 5. Assemble kmers into contigs (skesa or spades)
 6. Map contigs to an exclusion genome to identify the variants (minimap2)
-7. Filter contigs to only the keep the ones that have at least three variants within 21 bp (the average PCR primer length) (samtools)
+7. Filter contigs to only the keep the ones that have at least two variants within 21 bp (the average PCR primer length) (samtools)
 8. Make sure that the remaining contigs are present in all inclusion genomes (blast)
 9. Further filter contigs to only keep the ones with variants conserved in all exclusion genomes (compensate for the fact that the variants are determined using a single exclusion genome) (blast)
 
